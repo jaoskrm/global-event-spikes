@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { DeckGL } from "@deck.gl/react";
-import { ColumnLayer, ScatterplotLayer, SolidPolygonLayer } from "@deck.gl/layers";
+import { ColumnLayer, GeoJsonLayer, ScatterplotLayer, SolidPolygonLayer } from "@deck.gl/layers";
 import { _GlobeView as GlobeView, MapView, FlyToInterpolator, LightingEffect, AmbientLight, DirectionalLight } from "@deck.gl/core";
 import type { HotCluster } from "@/data/mockClusters";
 import { getSeverityColor } from "@/data/mockClusters";
@@ -13,49 +13,25 @@ const INITIAL_VIEW_STATE = {
   bearing: 0,
 };
 
-// Create a polygon approximating the earth's surface
+const COUNTRIES_GEOJSON_URL =
+  "https://d2ad6b4ur7yvpq.cloudfront.net/naturalearth-3.3.0/ne_50m_admin_0_countries.geojson";
+
+// Globe surface polygon
 function createGlobePolygon() {
   const coords: [number, number][] = [];
-  for (let lon = -180; lon <= 180; lon += 5) {
-    coords.push([lon, -85]);
-  }
-  for (let lat = -85; lat <= 85; lat += 5) {
-    coords.push([180, lat]);
-  }
-  for (let lon = 180; lon >= -180; lon -= 5) {
-    coords.push([lon, 85]);
-  }
-  for (let lat = 85; lat >= -85; lat -= 5) {
-    coords.push([-180, lat]);
-  }
+  for (let lon = -180; lon <= 180; lon += 5) coords.push([lon, -85]);
+  for (let lat = -85; lat <= 85; lat += 5) coords.push([180, lat]);
+  for (let lon = 180; lon >= -180; lon -= 5) coords.push([lon, 85]);
+  for (let lat = 85; lat >= -85; lat -= 5) coords.push([-180, lat]);
   return coords;
 }
-
 const GLOBE_POLYGON = createGlobePolygon();
 
 // Lighting
-const ambientLight = new AmbientLight({
-  color: [255, 255, 255],
-  intensity: 1.5,
-});
-
-const sunLight = new DirectionalLight({
-  color: [255, 245, 230],
-  intensity: 2.0,
-  direction: [-3, -9, -1],
-});
-
-const moonLight = new DirectionalLight({
-  color: [180, 200, 255],
-  intensity: 0.6,
-  direction: [5, 5, -1],
-});
-
-const lightingEffect = new LightingEffect({
-  ambientLight,
-  sunLight,
-  moonLight,
-});
+const ambientLight = new AmbientLight({ color: [255, 255, 255], intensity: 1.5 });
+const sunLight = new DirectionalLight({ color: [255, 245, 230], intensity: 2.0, direction: [-3, -9, -1] });
+const moonLight = new DirectionalLight({ color: [180, 200, 255], intensity: 0.6, direction: [5, 5, -1] });
+const lightingEffect = new LightingEffect({ ambientLight, sunLight, moonLight });
 
 interface GlobeCanvasProps {
   clusters: HotCluster[];
@@ -65,7 +41,15 @@ interface GlobeCanvasProps {
 
 export default function GlobeCanvas({ clusters, onClusterClick, selectedCluster }: GlobeCanvasProps) {
   const [viewState, setViewState] = useState(INITIAL_VIEW_STATE);
+  const [countriesData, setCountriesData] = useState<any>(null);
   const isGlobeMode = viewState.zoom < 3;
+
+  useEffect(() => {
+    fetch(COUNTRIES_GEOJSON_URL)
+      .then((r) => r.json())
+      .then(setCountriesData)
+      .catch(console.error);
+  }, []);
 
   const handleViewStateChange = useCallback(({ viewState: newVS }: any) => {
     setViewState(newVS);
@@ -88,19 +72,27 @@ export default function GlobeCanvas({ clusters, onClusterClick, selectedCluster 
   const layers = useMemo(() => {
     if (isGlobeMode) {
       return [
-        // Globe surface
+        // Ocean surface
         new SolidPolygonLayer({
-          id: "globe-surface",
+          id: "globe-ocean",
           data: [{ polygon: GLOBE_POLYGON }],
           getPolygon: (d: any) => d.polygon,
-          getFillColor: [12, 18, 30, 255],
-          material: {
-            ambient: 0.4,
-            diffuse: 0.8,
-            shininess: 20,
-            specularColor: [40, 60, 100],
-          },
+          getFillColor: [8, 14, 28, 255],
+          material: { ambient: 0.4, diffuse: 0.6, shininess: 10 },
         }),
+        // Country fills
+        countriesData &&
+          new GeoJsonLayer({
+            id: "globe-countries",
+            data: countriesData,
+            filled: true,
+            stroked: true,
+            getFillColor: [18, 28, 45, 255],
+            getLineColor: [40, 70, 110, 180],
+            getLineWidth: 1,
+            lineWidthMinPixels: 0.5,
+            material: { ambient: 0.5, diffuse: 0.7, shininess: 10 },
+          }),
         // Spikes
         new ColumnLayer({
           id: "hot-clusters-columns",
@@ -116,19 +108,25 @@ export default function GlobeCanvas({ clusters, onClusterClick, selectedCluster 
           onClick: (info: any) => {
             if (info.object) flyTo(info.object);
           },
-          material: {
-            ambient: 0.8,
-            diffuse: 0.9,
-            shininess: 60,
-          },
-          updateTriggers: {
-            getFillColor: [selectedCluster?.h3_index],
-          },
+          material: { ambient: 0.8, diffuse: 0.9, shininess: 60 },
+          updateTriggers: { getFillColor: [selectedCluster?.h3_index] },
         }),
-      ];
+      ].filter(Boolean);
     }
 
     return [
+      // Flat map countries
+      countriesData &&
+        new GeoJsonLayer({
+          id: "map-countries",
+          data: countriesData,
+          filled: true,
+          stroked: true,
+          getFillColor: [18, 28, 45, 255],
+          getLineColor: [40, 70, 110, 140],
+          getLineWidth: 1,
+          lineWidthMinPixels: 0.5,
+        }),
       new ScatterplotLayer({
         id: "hot-clusters-scatter",
         data: clusters,
@@ -142,18 +140,14 @@ export default function GlobeCanvas({ clusters, onClusterClick, selectedCluster 
         radiusMinPixels: 6,
         radiusMaxPixels: 40,
         onClick: (info: any) => {
-          if (info.object) {
-            onClusterClick(info.object);
-          }
+          if (info.object) onClusterClick(info.object);
         },
       }),
-    ];
-  }, [clusters, isGlobeMode, flyTo, onClusterClick, selectedCluster]);
+    ].filter(Boolean);
+  }, [clusters, countriesData, isGlobeMode, flyTo, onClusterClick, selectedCluster]);
 
   const views = useMemo(() => {
-    if (isGlobeMode) {
-      return new GlobeView({ id: "globe", resolution: 2 });
-    }
+    if (isGlobeMode) return new GlobeView({ id: "globe", resolution: 2 });
     return new MapView({ id: "map" });
   }, [isGlobeMode]);
 
@@ -190,10 +184,7 @@ export default function GlobeCanvas({ clusters, onClusterClick, selectedCluster 
       {/* Map background for tactical mode */}
       <div
         className="absolute inset-0 transition-opacity duration-1000"
-        style={{
-          opacity: isGlobeMode ? 0 : 1,
-          background: "hsl(220 20% 4%)",
-        }}
+        style={{ opacity: isGlobeMode ? 0 : 1, background: "hsl(220 20% 4%)" }}
       />
 
       <DeckGL
