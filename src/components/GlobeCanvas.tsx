@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { DeckGL } from "@deck.gl/react";
-import { ColumnLayer, ScatterplotLayer } from "@deck.gl/layers";
-import { _GlobeView as GlobeView, MapView, FlyToInterpolator } from "@deck.gl/core";
+import { ColumnLayer, ScatterplotLayer, SolidPolygonLayer } from "@deck.gl/layers";
+import { _GlobeView as GlobeView, MapView, FlyToInterpolator, LightingEffect, AmbientLight, DirectionalLight } from "@deck.gl/core";
 import type { HotCluster } from "@/data/mockClusters";
 import { getSeverityColor } from "@/data/mockClusters";
 
@@ -12,6 +12,50 @@ const INITIAL_VIEW_STATE = {
   pitch: 0,
   bearing: 0,
 };
+
+// Create a polygon approximating the earth's surface
+function createGlobePolygon() {
+  const coords: [number, number][] = [];
+  for (let lon = -180; lon <= 180; lon += 5) {
+    coords.push([lon, -85]);
+  }
+  for (let lat = -85; lat <= 85; lat += 5) {
+    coords.push([180, lat]);
+  }
+  for (let lon = 180; lon >= -180; lon -= 5) {
+    coords.push([lon, 85]);
+  }
+  for (let lat = 85; lat >= -85; lat -= 5) {
+    coords.push([-180, lat]);
+  }
+  return coords;
+}
+
+const GLOBE_POLYGON = createGlobePolygon();
+
+// Lighting
+const ambientLight = new AmbientLight({
+  color: [255, 255, 255],
+  intensity: 1.5,
+});
+
+const sunLight = new DirectionalLight({
+  color: [255, 245, 230],
+  intensity: 2.0,
+  direction: [-3, -9, -1],
+});
+
+const moonLight = new DirectionalLight({
+  color: [180, 200, 255],
+  intensity: 0.6,
+  direction: [5, 5, -1],
+});
+
+const lightingEffect = new LightingEffect({
+  ambientLight,
+  sunLight,
+  moonLight,
+});
 
 interface GlobeCanvasProps {
   clusters: HotCluster[];
@@ -44,13 +88,27 @@ export default function GlobeCanvas({ clusters, onClusterClick, selectedCluster 
   const layers = useMemo(() => {
     if (isGlobeMode) {
       return [
+        // Globe surface
+        new SolidPolygonLayer({
+          id: "globe-surface",
+          data: [{ polygon: GLOBE_POLYGON }],
+          getPolygon: (d: any) => d.polygon,
+          getFillColor: [12, 18, 30, 255],
+          material: {
+            ambient: 0.4,
+            diffuse: 0.8,
+            shininess: 20,
+            specularColor: [40, 60, 100],
+          },
+        }),
+        // Spikes
         new ColumnLayer({
           id: "hot-clusters-columns",
           data: clusters,
-          diskResolution: 6,
-          radius: 40000,
+          diskResolution: 8,
+          radius: 45000,
           extruded: true,
-          elevationScale: 80,
+          elevationScale: 100,
           getPosition: (d: HotCluster) => [d.center_lon, d.center_lat],
           getElevation: (d: HotCluster) => d.total_mentions,
           getFillColor: (d: HotCluster) => getSeverityColor(d.avg_severity),
@@ -59,9 +117,9 @@ export default function GlobeCanvas({ clusters, onClusterClick, selectedCluster 
             if (info.object) flyTo(info.object);
           },
           material: {
-            ambient: 0.6,
-            diffuse: 0.6,
-            shininess: 40,
+            ambient: 0.8,
+            diffuse: 0.9,
+            shininess: 60,
           },
           updateTriggers: {
             getFillColor: [selectedCluster?.h3_index],
@@ -99,9 +157,11 @@ export default function GlobeCanvas({ clusters, onClusterClick, selectedCluster 
     return new MapView({ id: "map" });
   }, [isGlobeMode]);
 
+  const effects = useMemo(() => [lightingEffect], []);
+
   return (
     <div className="absolute inset-0">
-      {/* Starfield background for globe mode */}
+      {/* Starfield background */}
       <div
         className="absolute inset-0 transition-opacity duration-1000"
         style={{
@@ -109,7 +169,6 @@ export default function GlobeCanvas({ clusters, onClusterClick, selectedCluster 
           background: "radial-gradient(ellipse at center, hsl(220 20% 6%) 0%, hsl(220 25% 2%) 100%)",
         }}
       >
-        {/* Stars */}
         <div className="absolute inset-0" style={{
           backgroundImage: `
             radial-gradient(1px 1px at 10% 20%, hsl(0 0% 80%) 50%, transparent 100%),
@@ -143,6 +202,7 @@ export default function GlobeCanvas({ clusters, onClusterClick, selectedCluster 
         controller={true}
         layers={layers}
         views={views}
+        effects={effects}
         getCursor={({ isHovering }: { isHovering: boolean }) => isHovering ? "pointer" : "grab"}
         style={{ position: "absolute", inset: "0" }}
       />
